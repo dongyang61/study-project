@@ -1,0 +1,13 @@
+﻿# 本地密钥配置（不要提交）
+config.ini
+*.local.ini
+
+# 二进制 / 数据文件
+*.exe
+*.db
+*.pyc
+__pycache__/
+
+# 系统文件
+Thumbs.db
+.DS_Store

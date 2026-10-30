@@ -1,0 +1,490 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AnythingLLM 文档管理</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;max-width:720px;margin:40px auto;padding:0 20px 40px;color:#222;background:#fff}
+  h1{font-size:22px;margin:0 0 20px}
+  h2{font-size:16px;margin:0;font-weight:600}
+  .card{border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:18px}
+  .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+  label{display:block;margin:0 0 6px;font-size:14px;color:#555}
+  input,select,button{font-size:15px;font-family:inherit}
+  select{width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;color:#222}
+  select:disabled{background:#f9fafb;color:#6b7280}
+  button{padding:10px 22px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer}
+  button:disabled{background:#9ca3af;cursor:default}
+  button.ghost{background:#fff;color:#2563eb;border:1px solid #bfdbfe;padding:6px 14px;font-size:14px}
+  button.ghost:disabled{color:#9ca3af;border-color:#e5e7eb;background:#fff}
+  #search{width:100%;padding:9px 10px;margin-top:14px;border:1px solid #d1d5db;border-radius:6px;color:#222}
+  #search:focus,select:focus{outline:2px solid #bfdbfe;outline-offset:1px;border-color:#2563eb}
+  .field{margin-top:16px}
+  .inline-row{display:flex;align-items:center;gap:12px;margin-top:16px}
+  #log{margin-top:16px;padding:12px;background:#f5f5f5;border-radius:6px;font-size:13px;white-space:pre-wrap;min-height:20px}
+  .muted{color:#6b7280;font-size:13px}
+  .ok{color:#16a34a}
+  .err{color:#dc2626}
+  .upload-status{list-style:none;margin:12px 0 0;padding:0;font-size:13px}
+  .upload-status li{display:flex;gap:12px;justify-content:space-between;padding:5px 0;border-bottom:1px dashed #f1f1f1}
+  .upload-status li:last-child{border-bottom:0}
+  .upload-name{color:#374151;word-break:break-all;min-width:0}
+  .upload-state{flex:none;color:#6b7280}
+  .upload-state.ok{color:#16a34a}
+  .upload-state.err{color:#dc2626}
+  #listStatus{font-size:14px;min-height:20px;margin:12px 0 4px}
+  .doc-list{list-style:none;margin:0;padding:0}
+  .doc-item{display:flex;align-items:flex-start;gap:14px;padding:12px 8px;margin:0 -8px;border-top:1px solid #f0f0f0;border-radius:6px;transition:background .3s}
+  .doc-item:first-child{border-top:0}
+  .doc-item.highlight{background:#dbeafe}
+  .doc-item.deleting{opacity:.45}
+  .doc-main{flex:1;min-width:0}
+  .doc-name{font-size:15px;font-weight:600;word-break:break-all}
+  .doc-meta{font-size:12px;color:#6b7280;margin-top:4px}
+  .doc-path{font-size:12px;color:#9ca3af;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  button.del{flex:none;background:#fff;color:#dc2626;border:1px solid #fecaca;padding:6px 14px;font-size:13px}
+  button.del:disabled{background:#f9fafb;color:#9ca3af;border-color:#e5e7eb}
+</style>
+</head>
+<body>
+<h1>AnythingLLM 文档管理</h1>
+
+<section class="card">
+  <div class="card-head">
+    <h2>上传文档</h2>
+    <span id="wsStatus" class="muted">加载中…</span>
+  </div>
+  <label for="workspace">目标工作区</label>
+  <select id="workspace" disabled>
+    <option>加载工作区中…</option>
+  </select>
+
+  <div class="field">
+    <label for="files">选择文件（可多选）</label>
+    <input type="file" id="files" multiple>
+  </div>
+  <div class="inline-row">
+    <button id="btn" type="button" disabled>上传并嵌入</button>
+  </div>
+  <div id="log">就绪</div>
+  <ul id="uploadStatus" class="upload-status"></ul>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>文件列表</h2>
+    <button id="refresh" type="button" class="ghost" disabled>刷新</button>
+  </div>
+  <input type="search" id="search" placeholder="按文件名搜索…" autocomplete="off">
+  <div id="count" class="muted" style="margin-top:10px"></div>
+  <div id="listStatus" class="muted">加载中…</div>
+  <ul id="docList" class="doc-list"></ul>
+</section>
+
+<script>
+const API = "http://localhost:3001/api";
+const KEY = "EPHZ30T-CTXM3T9-KFZ3P1J-XV28DM4";
+const H = { Authorization: "Bearer " + KEY };
+const $ = id => document.getElementById(id);
+const log = (msg, cls) => {
+  const box = $("log");
+  box.textContent = "";
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = msg;
+  box.appendChild(span);
+};
+
+const state = {
+  workspaces: [],
+  slug: "",
+  workspaceName: "",
+  documents: [],
+  keyword: ""
+};
+
+function setListStatus(text, cls) {
+  const el = $("listStatus");
+  el.textContent = text || "";
+  el.className = cls || "muted";
+}
+
+async function request(path, options = {}) {
+  let res;
+  try {
+    res = await fetch(API + path, { ...options, headers: { ...H, ...(options.headers || {}) } });
+  } catch (e) {
+    throw new Error("网络请求失败，请确认 AnythingLLM 服务已启动（" + API + "）");
+  }
+
+  const text = await res.text();
+  let data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      if (res.ok) throw new Error("接口返回的不是有效 JSON");
+    }
+  }
+
+  if (!res.ok) {
+    const detail = (data && (data.error || data.message)) || text.slice(0, 200) || ("HTTP " + res.status);
+    throw new Error("请求失败（" + res.status + "）：" + detail);
+  }
+  if (data === null) throw new Error("接口返回内容为空");
+
+  console.log("[API]", options.method || "GET", path, data);
+  return data;
+}
+
+// AnythingLLM 不同版本可能把 workspace 返回成数组或对象，这里统一取出对象
+function extractWorkspace(data) {
+  if (!data) return null;
+  const w = data.workspace;
+  if (Array.isArray(w)) return w[0] || null;
+  if (w && typeof w === "object") return w;
+  if (Array.isArray(data.workspaces)) return data.workspaces[0] || null;
+  if (Array.isArray(data)) return data[0] || null;
+  return null;
+}
+
+function parseMetadata(raw) {
+  if (!raw) return {};
+  if (typeof raw === "object") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return {};
+  }
+}
+
+// 接口真实字段：docpath 为唯一标识；metadata 是 JSON 字符串，title/wordCount/published 在其中
+function normalizeDoc(doc) {
+  const meta = parseMetadata(doc.metadata);
+  const title = meta.title || doc.title || doc.filename || doc.docpath || "未命名文件";
+  const docpath = doc.docpath || doc.location || "";
+  const ext = /\.([A-Za-z0-9]{1,8})$/.exec(title);
+  const wordCount = Number(meta.wordCount);
+  return {
+    id: doc.id != null ? doc.id : doc.docId || docpath,
+    docId: doc.docId || "",
+    title,
+    docpath,
+    type: ext ? ext[1].toUpperCase() : "未知类型",
+    wordCount: isFinite(wordCount) && wordCount > 0 ? wordCount : 0,
+    published: meta.published || ""
+  };
+}
+
+async function loadWorkspaces() {
+  const sel = $("workspace");
+  sel.disabled = true;
+  $("wsStatus").textContent = "加载中…";
+  $("wsStatus").className = "muted";
+
+  try {
+    const data = await request("/v1/workspaces");
+    const list = Array.isArray(data.workspaces) ? data.workspaces : [];
+    if (!list.length) throw new Error("没有可用的工作区");
+
+    state.workspaces = list;
+    sel.textContent = "";
+    list.forEach(ws => {
+      const opt = document.createElement("option");
+      opt.value = ws.slug;
+      opt.textContent = ws.name || ws.slug;
+      sel.appendChild(opt);
+    });
+
+    // 兜底：默认选中第一个工作区（保持原有行为）
+    sel.value = list[0].slug;
+    state.slug = sel.value;
+    state.workspaceName = sel.options[sel.selectedIndex].textContent;
+    sel.disabled = false;
+    $("wsStatus").textContent = "共 " + list.length + " 个工作区";
+    $("wsStatus").className = "muted";
+    $("btn").disabled = false;
+    $("refresh").disabled = false;
+
+    await loadDocuments();
+  } catch (e) {
+    state.workspaces = [];
+    state.slug = "";
+    state.workspaceName = "";
+    state.documents = [];
+    sel.textContent = "";
+    const opt = document.createElement("option");
+    opt.textContent = "工作区加载失败";
+    sel.appendChild(opt);
+    sel.disabled = true;
+    $("wsStatus").textContent = "工作区加载失败";
+    $("wsStatus").className = "err";
+    $("btn").disabled = true;
+    $("refresh").disabled = true;
+    $("count").textContent = "";
+    $("docList").textContent = "";
+    setListStatus("加载工作区失败：" + e.message, "err");
+  }
+}
+
+async function loadDocuments(highlightPaths) {
+  if (!state.slug) return;
+
+  const refreshBtn = $("refresh");
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = "刷新中…";
+  setListStatus("加载中…", "muted");
+
+  try {
+    const data = await request("/v1/workspace/" + encodeURIComponent(state.slug));
+    const ws = extractWorkspace(data);
+    if (!ws) throw new Error("接口未返回工作区信息");
+    const docs = Array.isArray(ws.documents) ? ws.documents : [];
+    state.documents = docs.map(normalizeDoc);
+    renderList(highlightPaths);
+  } catch (e) {
+    state.documents = [];
+    $("docList").textContent = "";
+    $("count").textContent = "共 0 个文件（筛选后 0 个）";
+    setListStatus("加载文件列表失败：" + e.message, "err");
+  } finally {
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = "刷新";
+  }
+}
+
+function renderList(highlightPaths) {
+  const list = $("docList");
+  list.textContent = "";
+
+  const total = state.documents.length;
+  const keyword = (state.keyword || "").trim().toLowerCase();
+  const filtered = keyword
+    ? state.documents.filter(d => d.title.toLowerCase().includes(keyword))
+    : state.documents;
+
+  $("count").textContent = "共 " + total + " 个文件（筛选后 " + filtered.length + " 个）";
+
+  if (total === 0) {
+    setListStatus("当前工作区还没有文件", "muted");
+    return;
+  }
+  if (filtered.length === 0) {
+    setListStatus("没有匹配的文件", "muted");
+    return;
+  }
+  setListStatus("", "muted");
+
+  const rows = new Map();
+  filtered.forEach(doc => {
+    const li = document.createElement("li");
+    li.className = "doc-item";
+
+    const main = document.createElement("div");
+    main.className = "doc-main";
+
+    const name = document.createElement("div");
+    name.className = "doc-name";
+    name.textContent = doc.title;
+    name.title = doc.title;
+
+    const meta = document.createElement("div");
+    meta.className = "doc-meta";
+    const metaParts = [doc.type];
+    if (doc.wordCount) metaParts.push(doc.wordCount + " 词");
+    if (doc.published) metaParts.push(doc.published);
+    meta.textContent = metaParts.join(" · ");
+
+    const path = document.createElement("div");
+    path.className = "doc-path";
+    path.textContent = doc.docpath || "（无来源路径）";
+    path.title = doc.docpath || "";
+
+    main.append(name, meta, path);
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "del";
+    del.textContent = "删除";
+    del.addEventListener("click", () => deleteDocument(doc, li, del));
+
+    li.append(main, del);
+    if (doc.docpath) rows.set(doc.docpath, li);
+    list.appendChild(li);
+  });
+
+  if (Array.isArray(highlightPaths) && highlightPaths.length) {
+    highlightPaths.forEach(p => {
+      const el = rows.get(p);
+      if (!el) return;
+      el.classList.add("highlight");
+      setTimeout(() => el.classList.remove("highlight"), 2000);
+    });
+  }
+}
+
+async function uploadFiles() {
+  const files = [...$("files").files];
+  if (!files.length) return log("请先选择文件", "err");
+  if (!state.slug) return log("请先选择工作区", "err");
+
+  const slug = state.slug;
+  const wsName = state.workspaceName;
+  const items = files.map(f => ({ name: f.name, status: "waiting", error: "" }));
+  const newPaths = [];
+  let success = 0;
+  let failed = 0;
+
+  const btn = $("btn");
+  const fileInput = $("files");
+  const wsSelect = $("workspace");
+  btn.disabled = true;
+  btn.textContent = "上传中…";
+  fileInput.disabled = true;
+  wsSelect.disabled = true;
+  renderUploadStatuses(items);
+  log("目标工作区：" + wsName + "（" + slug + "）");
+
+  for (let i = 0; i < files.length; i++) {
+    items[i].status = "uploading";
+    renderUploadStatuses(items);
+    try {
+      const fd = new FormData();
+      fd.append("file", files[i]);
+      fd.append("addToWorkspaces", slug);
+      const data = await request("/v1/document/upload", { method: "POST", body: fd });
+      if (!data.success) throw new Error(data.error || "接口未返回成功");
+      const uploaded = Array.isArray(data.documents) ? data.documents[0] : null;
+      const path = uploaded && (uploaded.location || uploaded.docpath);
+      if (path) newPaths.push(path);
+      items[i].status = "success";
+      success++;
+    } catch (e) {
+      items[i].status = "error";
+      items[i].error = e.message;
+      failed++;
+    }
+    renderUploadStatuses(items);
+  }
+
+  btn.disabled = false;
+  btn.textContent = "上传并嵌入";
+  fileInput.disabled = false;
+  wsSelect.disabled = false;
+
+  if (success > 0) await loadDocuments(newPaths);
+
+  log(
+    "上传完成：成功 " + success + " 个" + (failed ? "，失败 " + failed + " 个" : ""),
+    failed ? "err" : "ok"
+  );
+}
+
+function renderUploadStatuses(items) {
+  const ul = $("uploadStatus");
+  ul.textContent = "";
+  items.forEach(item => {
+    const li = document.createElement("li");
+
+    const name = document.createElement("span");
+    name.className = "upload-name";
+    name.textContent = item.name;
+
+    const st = document.createElement("span");
+    let text = "等待";
+    let cls = "";
+    if (item.status === "uploading") {
+      text = "上传中…";
+    } else if (item.status === "success") {
+      text = "成功";
+      cls = "ok";
+    } else if (item.status === "error") {
+      text = "失败：" + (item.error || "未知错误");
+      cls = "err";
+    }
+    st.className = "upload-state" + (cls ? " " + cls : "");
+    st.textContent = text;
+
+    li.append(name, st);
+    ul.appendChild(li);
+  });
+}
+
+async function deleteDocument(doc, rowEl, btn) {
+  if (!state.slug) return;
+
+  const ok = confirm("确定要从工作区「" + state.workspaceName + "」移除文件「" + doc.title + "」吗？");
+  if (!ok) return;
+
+  rowEl.classList.add("deleting");
+  btn.disabled = true;
+  btn.textContent = "删除中…";
+  setListStatus("", "muted");
+
+  try {
+    const data = await request(
+      "/v1/workspace/" + encodeURIComponent(state.slug) + "/update-embeddings",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adds: [], deletes: [doc.docpath] })
+      }
+    );
+    console.log("[update-embeddings] 响应：", data);
+
+    if (data && data.success === false) {
+      throw new Error(data.error || "接口未返回成功");
+    }
+
+    // 优先使用接口返回的最新 documents 校验；结构不支持时重新拉取列表校验
+    const ws = extractWorkspace(data);
+    if (ws && Array.isArray(ws.documents)) {
+      if (ws.documents.some(d => (d.docpath || d.location) === doc.docpath)) {
+        throw new Error("接口返回成功，但文件仍在工作区中，请刷新后重试");
+      }
+      state.documents = ws.documents.map(normalizeDoc);
+      renderList();
+    } else {
+      await loadDocuments();
+      if (state.documents.some(d => d.docpath === doc.docpath)) {
+        throw new Error("接口返回成功，但文件仍在工作区中，请刷新后重试");
+      }
+    }
+
+    setListStatus("已从工作区移除", "ok");
+  } catch (e) {
+    rowEl.classList.remove("deleting");
+    btn.disabled = false;
+    btn.textContent = "删除";
+    setListStatus("删除失败：" + e.message, "err");
+  }
+}
+
+$("btn").addEventListener("click", uploadFiles);
+
+$("refresh").addEventListener("click", () => loadDocuments());
+
+$("workspace").addEventListener("change", async e => {
+  state.slug = e.target.value;
+  state.workspaceName = e.target.options[e.target.selectedIndex].textContent;
+  state.documents = [];
+  $("docList").textContent = "";
+  $("count").textContent = "";
+  await loadDocuments();
+});
+
+$("search").addEventListener("input", e => {
+  state.keyword = e.target.value;
+  renderList();
+});
+
+$("search").addEventListener("keydown", e => {
+  if (e.key === "Enter") e.preventDefault();
+});
+
+loadWorkspaces();
+</script>
+</body>
+</html>
