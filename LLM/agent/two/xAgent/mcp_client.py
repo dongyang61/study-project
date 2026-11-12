@@ -1,16 +1,20 @@
 """MCP Client：读取项目 .mcp.json，发现并调用 MCP Server 工具。
 
-同步 Agent 循环通过 asyncio.run 为每次操作建立独立会话，避免共享事件循环。
+每个 Server 在后台事件循环上维护一个持久 ClientSession，跨调用复用；
+会话断开或超时后整体关闭，下次调用自动重建。
 """
 
 from __future__ import annotations
 
 import asyncio
+import atexit
+import concurrent.futures
 import json
 import os
 import re
+import threading
 from collections import Counter
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,9 +23,18 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
+from .logger import get_logger
+
 CONFIG_FILE = ".mcp.json"
 DEFAULT_TIMEOUT = 60
-LOCAL_TOOL_NAMES = {"RunCli", "fetchWeb", "searchWeb", "loadSkill", "createMCP"}
+LOCAL_TOOL_NAMES = {
+    "get_cwd", "list_dir", "get_file_type", "read_text_file", "create_file",
+    "edit_text_file", "create_dir", "delete_dir", "delete_file", "rename_path",
+    "getCurrentTime", "isLeapYear", "RunCli", "fetchWeb", "searchWeb",
+    "loadSkill", "createSkill", "createMCP",
+}
+
+logger = get_logger("xAgent.mcp")
 
 _HTTP_TYPES = {"streamable_http", "streamable-http", "streamablehttp", "http"}
 _NAME_RE = re.compile(r"[^A-Za-z0-9_-]")
@@ -40,11 +53,12 @@ class MCPTool:
     input_schema: dict
 
     def schema(self) -> dict:
+        description = self.description or self.name
         return {
             "type": "function",
             "function": {
                 "name": self.exposed_name,
-                "description": self.description or self.name,
+                "description": f"[MCP:{self.server}] {description}",
                 "parameters": self.input_schema or {"type": "object", "properties": {}},
             },
         }
@@ -130,27 +144,131 @@ def _normalize(name: str, conf: dict) -> dict:
     raise MCPError(f"不支持的 MCP 传输类型：{kind or '未指定'}")
 
 
-@asynccontextmanager
-async def _session(conf: dict):
-    if conf["type"] == "stdio":
-        params = StdioServerParameters(
-            command=conf["command"],
-            args=conf["args"],
-            env=conf["env"],
-            cwd=conf.get("cwd"),
-        )
-        async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                yield session
-        return
+class _BackgroundLoop:
+    """单后台线程事件循环，所有持久会话都提交到它上面执行。"""
 
-    client = httpx2.AsyncClient(headers=conf.get("headers") or None, timeout=conf["timeout"])
-    async with client:
-        async with streamable_http_client(conf["url"], http_client=client) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                yield session
+    def __init__(self) -> None:
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()
+        self._start_lock = threading.Lock()
+
+    def start(self) -> asyncio.AbstractEventLoop:
+        with self._start_lock:
+            if self._thread is not None and self._thread.is_alive():
+                return self._loop  # type: ignore[return-value]
+            self._ready.clear()
+            self._thread = threading.Thread(
+                target=self._run, name="mcp-client-loop", daemon=True
+            )
+            self._thread.start()
+            self._ready.wait()
+            return self._loop  # type: ignore[return-value]
+
+    def _run(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
+        self._ready.set()
+        loop.run_forever()
+
+    def submit(self, coro, timeout: float):
+        loop = self.start()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        try:
+            return future.result(timeout)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise TimeoutError(f"操作超时（{timeout:g} 秒）") from None
+
+
+_LOOP = _BackgroundLoop()
+
+
+class _PersistentSession:
+    """单个 MCP Server 的持久连接；按需建立，失败后关闭，下次调用重建。"""
+
+    def __init__(self, server: str, conf: dict) -> None:
+        self.server = server
+        self.conf = conf
+        self.lock = threading.Lock()
+        self._stack: AsyncExitStack | None = None
+        self._session: ClientSession | None = None
+        self._closed = False
+
+    def list_tools(self):
+        return self._run(self._list_tools)
+
+    def call_tool(self, name: str, arguments: dict):
+        return self._run(lambda: self._call_tool(name, arguments))
+
+    def close(self) -> None:
+        with self.lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._close_locked()
+
+    def _run(self, factory):
+        """在锁内确保连接可用后执行一次操作；失败则关闭会话。"""
+        with self.lock:
+            if self._closed:
+                raise MCPError(f"MCP Server {self.server} 已关闭。")
+            try:
+                _LOOP.submit(self._ensure_open(), self.conf["timeout"])
+                return _LOOP.submit(factory(), self.conf["timeout"])
+            except Exception:
+                self._close_locked()
+                raise
+
+    def _close_locked(self) -> None:
+        stack, self._stack, self._session = self._stack, None, None
+        if stack is None:
+            return
+        try:
+            _LOOP.submit(stack.aclose(), 5)
+        except Exception:
+            pass
+
+    async def _ensure_open(self) -> None:
+        if self._session is not None:
+            return
+
+        stack = AsyncExitStack()
+        try:
+            if self.conf["type"] == "stdio":
+                params = StdioServerParameters(
+                    command=self.conf["command"],
+                    args=self.conf["args"],
+                    env=self.conf["env"],
+                    cwd=self.conf.get("cwd"),
+                )
+                read, write = await stack.enter_async_context(stdio_client(params))
+            else:
+                client = httpx2.AsyncClient(
+                    headers=self.conf.get("headers") or None,
+                    timeout=self.conf["timeout"],
+                )
+                await stack.enter_async_context(client)
+                read, write = await stack.enter_async_context(
+                    streamable_http_client(self.conf["url"], http_client=client)
+                )
+
+            session = await stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
+        except BaseException:
+            await stack.aclose()
+            raise
+
+        self._stack = stack
+        self._session = session
+
+    async def _list_tools(self):
+        result = await self._session.list_tools()
+        return result.tools
+
+    async def _call_tool(self, name: str, arguments: dict):
+        return await self._session.call_tool(name, arguments)
 
 
 def _format_result(result) -> str:
@@ -195,7 +313,10 @@ class MCPManager:
         self.servers: dict[str, dict] = {}
         self.tools: dict[str, MCPTool] = {}
         self.errors: list[str] = []
+        self._sessions: dict[str, _PersistentSession] = {}
+        self._closed = False
         self.discover()
+        atexit.register(self.close)
 
     def discover(self) -> None:
         try:
@@ -206,16 +327,24 @@ class MCPManager:
 
         found = []
         for server_name, raw in configs.items():
+            session = None
             try:
                 conf = _normalize(server_name, raw)
-                tools = asyncio.run(
-                    asyncio.wait_for(self._list_tools(conf), timeout=conf["timeout"])
-                )
+                old = self._sessions.pop(server_name, None)
+                if old is not None:
+                    old.close()
+                session = _PersistentSession(server_name, conf)
+                self._sessions[server_name] = session
+                tools = session.list_tools()
             except Exception as exc:
+                if session is not None:
+                    session.close()
+                self._sessions.pop(server_name, None)
                 message = _error_text(exc)
                 if "Server returned an error response" in message:
                     message += "；请检查 URL 是否有效、type 是否为 streamable_http、是否需要 headers 鉴权"
                 self.errors.append(f"MCP Server {server_name} 不可用：{message}")
+                logger.warning("MCP Server %s 不可用：%s", server_name, message)
                 continue
             self.servers[server_name] = conf
             for tool in tools:
@@ -233,13 +362,8 @@ class MCPManager:
         counts = Counter(name for _, name, _, _ in found)
         used: set[str] = set()
         for server_name, name, description, schema in found:
-            exposed = name
-            if (
-                counts[name] > 1
-                or name in self.reserved
-                or _NAME_RE.search(name)
-            ):
-                exposed = f"{_safe(server_name)}__{_safe(name)}"
+            # 始终带来源前缀，避免与本地工具/其他 Server 同名冲突。
+            exposed = f"{_safe(server_name)}__{_safe(name)}"
             base = exposed
             index = 2
             while exposed in used:
@@ -249,30 +373,37 @@ class MCPManager:
             self.tools[exposed] = MCPTool(
                 server_name, name, exposed, description, schema
             )
-
-    async def _list_tools(self, conf: dict):
-        async with _session(conf) as session:
-            result = await session.list_tools()
-            return result.tools
+            if counts[name] > 1:
+                logger.info(
+                    "MCP 工具重名：%s/%s 暴露为 %s", server_name, name, exposed
+                )
 
     def call(self, exposed_name: str, arguments: dict) -> str:
         tool = self.tools.get(exposed_name)
         if tool is None:
             return f"未知 MCP 工具：{exposed_name}"
-        conf = self.servers[tool.server]
+        session = self._sessions.get(tool.server)
+        if session is None:
+            return f"MCP Server 未连接：{tool.server}"
         try:
-            result = asyncio.run(
-                asyncio.wait_for(
-                    self._call_tool(conf, tool.name, arguments), timeout=conf["timeout"]
-                )
-            )
+            logger.info("调用 MCP 工具 %s/%s", tool.server, tool.name)
+            result = session.call_tool(tool.name, arguments)
         except Exception as exc:
+            logger.error("MCP 工具调用失败 %s/%s：%s", tool.server, tool.name, exc)
             return f"MCP 工具调用失败（{tool.server}/{tool.name}）：{_error_text(exc)}"
         return _format_result(result)
 
-    async def _call_tool(self, conf: dict, name: str, arguments: dict):
-        async with _session(conf) as session:
-            return await session.call_tool(name, arguments)
+    def close(self) -> None:
+        """关闭全部持久连接（幂等），确保 stdio 子进程退出。"""
+        if self._closed:
+            return
+        self._closed = True
+        for session in list(self._sessions.values()):
+            try:
+                session.close()
+            except Exception:
+                pass
+        self._sessions.clear()
 
 
 _manager: MCPManager | None = None
@@ -287,7 +418,9 @@ def get_mcp_manager() -> MCPManager:
 
 def reset_mcp_manager() -> None:
     global _manager
-    _manager = None
+    manager, _manager = _manager, None
+    if manager is not None:
+        manager.close()
 
 
 def mcp_tool_schemas() -> list[dict]:

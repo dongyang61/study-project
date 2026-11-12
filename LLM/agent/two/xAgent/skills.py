@@ -9,8 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .settings import agent_settings
+
 SKILLS_DIR = Path(".agents") / "skills"
 SKILL_FILE = "SKILL.md"
+DEFAULT_MAX_CHARS = 50000
 
 
 @dataclass
@@ -67,9 +70,12 @@ def _parse_frontmatter(path: Path) -> dict[str, str]:
 
 
 class SkillRegistry:
-    def __init__(self, project_root=None) -> None:
+    def __init__(self, project_root=None, max_chars: int | None = None) -> None:
         self.project_root = Path(project_root or Path.cwd()).resolve()
         self.root = self.project_root / SKILLS_DIR
+        if max_chars is None:
+            max_chars = agent_settings().get("skill_max_chars", DEFAULT_MAX_CHARS)
+        self.max_chars = max(1, int(max_chars))
         self.skills: dict[str, Skill] = {}
         self._discover()
 
@@ -114,14 +120,17 @@ class SkillRegistry:
 
         raw = str(filename).strip()
         path = Path(raw)
-        target = path if path.is_absolute() else None
+        if path.is_absolute():
+            return "拒绝读取：filename 必须是 Skill 目录内的相对路径，不能使用绝对路径。"
+        if any(part == ".." for part in path.parts):
+            return "拒绝读取：filename 不能包含 '..'，附件必须位于 Skill 目录内。"
 
-        if target is None:
-            for base in (skill.directory, self.project_root):
-                candidate = base / path
-                if candidate.exists():
-                    target = candidate
-                    break
+        target = None
+        for base in (skill.directory, self.project_root):
+            candidate = base / path
+            if candidate.exists():
+                target = candidate
+                break
         if target is None:
             target = skill.directory / path
 
@@ -156,18 +165,25 @@ class SkillRegistry:
         if not resolved.is_file():
             return f"不是文件：{resolved}"
         try:
-            return resolved.read_text(encoding="utf-8", errors="replace")
+            content = resolved.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             return f"读取文件失败：{exc}"
+        if len(content) > self.max_chars:
+            omitted = len(content) - self.max_chars
+            content = (
+                content[: self.max_chars]
+                + f"\n\n（已截断：内容超过 {self.max_chars} 字符，省略 {omitted} 字符）"
+            )
+        return content
 
 
 _registry = SkillRegistry()
 
 
-def init_skills(project_root=None) -> SkillRegistry:
+def init_skills(project_root=None, max_chars: int | None = None) -> SkillRegistry:
     """按指定项目根目录重新初始化；默认使用启动时工作目录。"""
     global _registry
-    _registry = SkillRegistry(project_root)
+    _registry = SkillRegistry(project_root, max_chars=max_chars)
     return _registry
 
 

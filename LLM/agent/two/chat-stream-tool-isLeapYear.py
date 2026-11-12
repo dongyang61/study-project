@@ -9,12 +9,9 @@ from pathlib import Path
 
 import requests
 
+from xAgent.tools.time_tools import is_leap_year
+
 CONFIG_PATH = Path(__file__).with_name("config.ini")
-
-
-def is_leap_year(year: int) -> str:
-    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
-    return f"{year} 年是闰年。" if leap else f"{year} 年不是闰年。"
 
 
 TOOLS = [

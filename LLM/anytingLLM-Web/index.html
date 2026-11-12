@@ -13,7 +13,10 @@
   .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
   label{display:block;margin:0 0 6px;font-size:14px;color:#555}
   input,select,button{font-size:15px;font-family:inherit}
-  select{width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;color:#222}
+  select,input[type=password],input[type=search],input[type=file]{width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;color:#222}
+  #apiKey{flex:1;min-width:0}
+  .inline-row{display:flex;align-items:center;gap:12px;margin-top:12px}
+  .inline-row button{flex:none}
   select:disabled{background:#f9fafb;color:#6b7280}
   button{padding:10px 22px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer}
   button:disabled{background:#9ca3af;cursor:default}
@@ -22,7 +25,6 @@
   #search{width:100%;padding:9px 10px;margin-top:14px;border:1px solid #d1d5db;border-radius:6px;color:#222}
   #search:focus,select:focus{outline:2px solid #bfdbfe;outline-offset:1px;border-color:#2563eb}
   .field{margin-top:16px}
-  .inline-row{display:flex;align-items:center;gap:12px;margin-top:16px}
   #log{margin-top:16px;padding:12px;background:#f5f5f5;border-radius:6px;font-size:13px;white-space:pre-wrap;min-height:20px}
   .muted{color:#6b7280;font-size:13px}
   .ok{color:#16a34a}
@@ -51,10 +53,26 @@
 <body>
 <h1>AnythingLLM 文档管理</h1>
 
+<section class="card" id="keyCard">
+  <div class="card-head">
+    <h2>API Key</h2>
+    <span id="keyStatus" class="muted">未配置</span>
+  </div>
+  <label for="apiKey">AnythingLLM API Key（仅保存在当前浏览器 localStorage）</label>
+  <div class="inline-row">
+    <input type="password" id="apiKey" placeholder="粘贴 API Key" autocomplete="off" spellcheck="false">
+    <button id="saveKey" type="button">保存</button>
+    <button id="clearKey" type="button" class="ghost">清除</button>
+  </div>
+  <div class="muted" style="margin-top:8px">
+    Key 不会写入代码或上传到本页面之外的服务器。请使用 AnythingLLM「设置 → 工具 → API Key」生成的密钥。
+  </div>
+</section>
+
 <section class="card">
   <div class="card-head">
     <h2>上传文档</h2>
-    <span id="wsStatus" class="muted">加载中…</span>
+    <span id="wsStatus" class="muted">未配置 API Key</span>
   </div>
   <label for="workspace">目标工作区</label>
   <select id="workspace" disabled>
@@ -85,8 +103,7 @@
 
 <script>
 const API = "http://localhost:3001/api";
-const KEY = "EPHZ30T-CTXM3T9-KFZ3P1J-XV28DM4";
-const H = { Authorization: "Bearer " + KEY };
+const KEY_STORAGE = "anythingllm_api_key";
 const $ = id => document.getElementById(id);
 const log = (msg, cls) => {
   const box = $("log");
@@ -97,6 +114,8 @@ const log = (msg, cls) => {
   box.appendChild(span);
 };
 
+let apiKey = "";
+
 const state = {
   workspaces: [],
   slug: "",
@@ -105,6 +124,82 @@ const state = {
   keyword: ""
 };
 
+function getStoredKey() {
+  try {
+    return (localStorage.getItem(KEY_STORAGE) || "").trim();
+  } catch (e) {
+    return "";
+  }
+}
+
+function storeKey(value) {
+  try {
+    if (value) localStorage.setItem(KEY_STORAGE, value);
+    else localStorage.removeItem(KEY_STORAGE);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function setKeyStatus(text, cls) {
+  const el = $("keyStatus");
+  el.textContent = text;
+  el.className = cls || "muted";
+}
+
+function applyKey(value, source) {
+  apiKey = (value || "").trim();
+  $("apiKey").value = apiKey;
+  if (!apiKey) {
+    setKeyStatus("未配置，所有操作已禁用", "err");
+    $("btn").disabled = true;
+    $("refresh").disabled = true;
+    $("workspace").disabled = true;
+    $("workspace").textContent = "";
+    const opt = document.createElement("option");
+    opt.textContent = "请先配置 API Key";
+    $("workspace").appendChild(opt);
+    $("wsStatus").textContent = "未配置 API Key";
+    $("wsStatus").className = "err";
+    $("count").textContent = "";
+    $("docList").textContent = "";
+    setListStatus("未配置 API Key：请在页面顶部输入并保存 AnythingLLM API Key。", "err");
+    if (source) log("未配置 API Key：请在页面顶部输入并保存。", "err");
+    return false;
+  }
+  setKeyStatus("已配置（仅保存在本浏览器）", "ok");
+  return true;
+}
+
+function saveKey() {
+  const value = $("apiKey").value.trim();
+  if (!value) {
+    applyKey("", true);
+    return;
+  }
+  if (!storeKey(value)) {
+    setKeyStatus("保存失败：浏览器禁止 localStorage", "err");
+    return;
+  }
+  if (!applyKey(value)) return;
+  log("API Key 已保存，正在加载工作区…", "ok");
+  loadWorkspaces();
+}
+
+function clearKey() {
+  storeKey("");
+  applyKey("", true);
+  setKeyStatus("已清除", "muted");
+}
+
+function authHeaders(extra) {
+  if (!apiKey) {
+    throw new Error("未配置 API Key：请先在页面顶部输入并保存 AnythingLLM API Key。");
+  }
+  return { Authorization: "Bearer " + apiKey, ...(extra || {}) };
+}
+
 function setListStatus(text, cls) {
   const el = $("listStatus");
   el.textContent = text || "";
@@ -112,9 +207,15 @@ function setListStatus(text, cls) {
 }
 
 async function request(path, options = {}) {
+  let headers;
+  try {
+    headers = authHeaders(options.headers);
+  } catch (e) {
+    throw e;
+  }
   let res;
   try {
-    res = await fetch(API + path, { ...options, headers: { ...H, ...(options.headers || {}) } });
+    res = await fetch(API + path, { ...options, headers });
   } catch (e) {
     throw new Error("网络请求失败，请确认 AnythingLLM 服务已启动（" + API + "）");
   }
@@ -180,6 +281,10 @@ function normalizeDoc(doc) {
 
 async function loadWorkspaces() {
   const sel = $("workspace");
+  if (!apiKey) {
+    applyKey("", true);
+    return;
+  }
   sel.disabled = true;
   $("wsStatus").textContent = "加载中…";
   $("wsStatus").className = "muted";
@@ -462,6 +567,15 @@ async function deleteDocument(doc, rowEl, btn) {
   }
 }
 
+$("saveKey").addEventListener("click", saveKey);
+$("clearKey").addEventListener("click", clearKey);
+$("apiKey").addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    saveKey();
+  }
+});
+
 $("btn").addEventListener("click", uploadFiles);
 
 $("refresh").addEventListener("click", () => loadDocuments());
@@ -484,7 +598,13 @@ $("search").addEventListener("keydown", e => {
   if (e.key === "Enter") e.preventDefault();
 });
 
-loadWorkspaces();
+const initialKey = getStoredKey();
+if (applyKey(initialKey, false)) {
+  log("已从本浏览器读取 API Key，正在加载工作区…", "muted");
+  loadWorkspaces();
+} else {
+  log("请先在页面顶部输入并保存 AnythingLLM API Key。", "err");
+}
 </script>
 </body>
 </html>

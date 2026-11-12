@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-import configparser
+import sys
 from pathlib import Path
 
 import requests
+
+try:
+    from ..settings import find_config, search_api_key
+except ImportError:  # 直接运行本文件时退回包级导入
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from xAgent.settings import find_config, search_api_key
 
 TOOL_NAME = "searchWeb"
 
@@ -29,7 +35,6 @@ SEARCH_WEB_TOOL = {
 }
 
 API_URL = "https://qianfan.baidubce.com/v2/ai_search/web_search"
-CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.ini"
 
 
 class SearchWebError(RuntimeError):
@@ -37,12 +42,12 @@ class SearchWebError(RuntimeError):
 
 
 def _get_api_key() -> str:
-    if not CONFIG_PATH.exists():
-        raise SearchWebError(f"缺少配置文件：{CONFIG_PATH}")
-
-    config = configparser.ConfigParser()
-    config.read(CONFIG_PATH, encoding="utf-8")
-    api_key = config.get("search", "baidu_qianfan_api_key", fallback="").strip()
+    config_path = find_config()
+    if config_path is None:
+        raise SearchWebError(
+            "缺少配置文件 config.ini：请复制 xAgent/config.example.ini 为 config.ini 并填写"
+        )
+    api_key = search_api_key(config_path)
     if not api_key:
         raise SearchWebError("config.ini 缺少 [search] baidu_qianfan_api_key 配置")
     return api_key

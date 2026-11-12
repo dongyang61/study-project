@@ -8,6 +8,10 @@
 > **一句话记住**：复制「可执行文件 + `data/pet.db`」到另一台电脑，双击即可继续使用，
 > 无需安装 Go、数据库或任何运行时依赖。
 
+> **仓库交付说明**：本仓库只包含发行包说明、辅助脚本与文档；上游 Go 源码
+> （`main.go`、`go.mod`、`internal/`、`Makefile`、`build.sh`）**不随本仓库交付**。
+> 下文标注“上游源码”的构建命令与内部实现细节，仅在另行获得上游源码后适用。
+
 ## 特性
 
 - **网页操作界面**：浏览器访问 `http://127.0.0.1:8080/` 即可增删改查，无需写代码
@@ -49,10 +53,13 @@ pethospital.exe                       # Windows（双击或命令行）
 
 > Windows 程序会在终端打印访问地址，**不会自动打开浏览器**。其他平台请下载对应发行包，或用「方式二」自行编译。
 
-### 方式二：从源码编译
+### 方式二：从上游源码编译（源码不随本仓库交付）
+
+以下命令只适用于另行获得上游 Go 源码的情况；本仓库没有 `main.go`、`go.mod`、
+`internal/`、`Makefile` 或 `build.sh`，无法在当前目录直接执行。
 
 ```bash
-# 编译到 dist 目录（推荐，与发行包结构一致）
+# 在上游源码根目录执行
 make dist            # 或： ./build.sh
 
 # 或者直接运行源码
@@ -63,7 +70,7 @@ go run . -addr :9090 -db /tmp/hospital.db # 自定义端口与数据库路径
 go run . -no-color                        # 关闭彩色输出
 ```
 
-### 交叉编译到其他平台
+### 交叉编译到其他平台（上游源码）
 
 ```bash
 GOOS=windows GOARCH=amd64 go build -o dist/pethospital.exe .   # Windows 64 位
@@ -287,28 +294,30 @@ curl -s 'http://127.0.0.1:8080/api/v1/export?format=csv' -o pets.csv
 curl -s -X DELETE http://127.0.0.1:8080/api/v1/pets/PET-000001
 ```
 
-## 项目结构
+## 本仓库实际包含的内容
 
 ```text
-.
-├── main.go                  启动横幅、服务网址、优雅退出
-├── go.mod
-├── Makefile                 构建与发行命令（make help）
-├── build.sh                 构建脚本（无需 make）
-└── internal/
-    ├── model/model.go       数据模型与校验
-    ├── store/store.go       单文件嵌入式数据库引擎
-    └── api/
-        ├── api.go           REST 路由与处理器
-        ├── generate.go      大批量模拟数据生成器
-        ├── support.go       ANSI 着色、手工精选数据
-        ├── web.go           网页路由（embed 内嵌）
-        └── web/index.html   网页界面（单文件）
+study one-pethospital/
+├── README.md                      本说明
+├── README-Windows.md              Windows 使用说明
+├── LICENSE
+├── MVP_DEVELOPMENT_PROMPT.md       上游 MVP 提示词
+├── PYTHON_GENDER_FILTER_PROMPT.md  辅助脚本提示词
+├── WEB_GENDER_FILTER_PROMPT.md     辅助脚本提示词
+├── pet_web_filter.py              网页数据过滤辅助脚本
+├── pet-gender-filter.user.js      浏览器用户脚本
+├── data/pet.db                    本地数据库（.gitignore 忽略，不随 Git 交付）
+└── pethospital.exe                本地发行包可执行文件（.gitignore 忽略，不随 Git 交付）
 ```
 
-## 构建与发布
+上游 Go 源码的目录结构（`main.go`、`go.mod`、`Makefile`、`build.sh`、`internal/` 等）
+**不在本仓库中**，因此不能在本目录执行 `make`、`go run` 或 `go build`。
+如需从源码构建，请另行获取上游源码。
+
+## 上游构建与发布（源码不在本仓库）
 
 ```bash
+# 以下命令需在上游 Go 源码根目录执行
 make help          # 查看全部命令
 make build         # 编译到 dist/pethospital
 make dist          # 构建 + 准备测试数据库 + 拷贝说明文档
@@ -316,11 +325,11 @@ make test-db       # 仅重建测试数据库（dist/data/pet.db，1000 条模�
 make clean         # 清理构建产物
 ```
 
-`make dist` 产出的 `dist/` 可作为 Release ZIP 的内容：可执行文件、`data/pet.db` 和 `README.md` 必须保持同一目录结构。项目根目录下的 `build.sh` 提供等价功能，不依赖 `make`。
+`make dist` 产出的 `dist/` 可作为 Release ZIP 的内容：可执行文件、`data/pet.db` 和 `README.md` 必须保持同一目录结构。上游项目根目录下的 `build.sh` 提供等价功能，不依赖 `make`。
 
 发布时请将 ZIP 作为 GitHub Release 附件上传；`dist/` 是本地构建产物，不提交到仓库。
 
-## 数据库文件格式
+## 数据库文件格式（上游源码实现细节，源码不在本仓库）
 
 ```text
 ┌ Header 32B ─────────────────────────────────┐

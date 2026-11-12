@@ -4,9 +4,15 @@
 #>
 $ErrorActionPreference = 'Stop'
 $Office = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PetExe = 'D:\study\study one-pethospital\pethospital.exe'
+# LLM\agent\office -> 仓库根目录；不依赖固定盘符。
+$Repo = (Resolve-Path (Join-Path $Office '..\..\..')).Path
+$PetExe = Join-Path $Repo 'study one-pethospital\pethospital.exe'
 $PetDir = Split-Path -Parent $PetExe
-$AnythingDir = 'D:\study\LLM\anytingLLM-MCP'
+$AnythingDir = Join-Path $Repo 'LLM\anytingLLM-MCP'
+
+if (-not $env:ANYTHINGLLM_API_KEY) {
+    Write-Warning '未设置 ANYTHINGLLM_API_KEY：8765 服务会启动，但 tools/call 将返回 isError=true。'
+}
 
 function Test-Port([int]$Port) {
     $client = New-Object System.Net.Sockets.TcpClient
@@ -25,8 +31,12 @@ function Start-Local([string]$Name, [int]$Port, [scriptblock]$Starter) {
     Write-Warning "[fail] $Name 未在 $Port 就绪"
 }
 
-Start-Local 'pethospital.exe' 8080 {
-    Start-Process -FilePath $PetExe -WorkingDirectory $PetDir -ArgumentList '-no-color' -WindowStyle Hidden
+if (Test-Path $PetExe) {
+    Start-Local 'pethospital.exe' 8080 {
+        Start-Process -FilePath $PetExe -WorkingDirectory $PetDir -ArgumentList '-no-color' -WindowStyle Hidden
+    }
+} else {
+    Write-Warning "[skip] 未找到 $PetExe；PetHospital MCP 仍会启动，但业务调用会返回 PET_UNAVAILABLE。"
 }
 
 Start-Local 'PetHospital MCP' 8090 {

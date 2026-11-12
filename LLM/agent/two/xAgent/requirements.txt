@@ -1,3 +1,7 @@
+# Python >= 3.13（已验证 3.13.7）
 trafilatura>=1.6.0
 requests>=2.31.0
-mcp>=2.0
+# MCP Python SDK；2.3.0 已验证可安装并支持 ClientSession/stdio/streamable_http
+mcp>=2.3.0,<3
+# mcp 的 streamable_http client 依赖 httpx2
+httpx2>=2.0

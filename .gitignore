@@ -13,4 +13,11 @@ Thumbs.db
 .DS_Store
 
 *.exe.old
+*.exe.update
+*.exe.partial
+*.update.partial
 __MACOSX/
+
+# Agent 运行时状态（会话与压缩归档，不是交付内容）
+.agents/sessions/
+.agents/context/

@@ -64,9 +64,12 @@ def usage_tokens(usage: dict | None) -> int:
     return int(prompt) + int(completion)
 
 
-def archive_context(messages: list[dict]) -> Path:
-    """逐条写入 JSONL；写盘成功才返回路径，失败抛 ArchiveError。"""
-    directory = CONTEXT_DIR
+def archive_context(messages: list[dict], root=None) -> Path:
+    """逐条写入 JSONL；写盘成功才返回路径，失败抛 ArchiveError。
+
+    root 用于跟随会话工作目录；省略时沿用进程当前目录。
+    """
+    directory = (Path(root).resolve() if root else Path.cwd()) / CONTEXT_DIR
     try:
         directory.mkdir(parents=True, exist_ok=True)
         path = _unique_path(directory)

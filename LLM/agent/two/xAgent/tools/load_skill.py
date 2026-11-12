@@ -14,7 +14,8 @@ LOAD_SKILL_TOOL = {
         "name": TOOL_NAME,
         "description": (
             "加载指定 Skill 的完整说明或附件文件。仅提供 name 时返回 SKILL.md 全文；"
-            "提供 filename 时只读取该文件（相对 Skill 目录、项目根目录或绝对路径均可）。"
+            "提供 filename 时只读取 Skill 目录内的相对路径（禁止绝对路径与 .. 越界）；"
+            "单次返回内容超过 50000 字符会截断并提示。"
         ),
         "parameters": {
             "type": "object",
