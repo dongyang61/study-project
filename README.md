@@ -237,7 +237,7 @@ python -m compileall LLM/agent/two/xAgent LLM/anytingLLM-MCP LLM/agent/office/pe
 python -m unittest discover -s tests
 ```
 
-预期：`compileall` 无 SyntaxError；unittest 以 `OK` 结束（当前 61 个测试）。
+预期：`compileall` 无 SyntaxError；unittest 以 `OK` 结束（当前 62 个测试）。
 
 ### 7.2 技能校验
 

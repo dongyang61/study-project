@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "LLM" / "agent" / "two"))
 
 from xAgent.skills import SKILLS_DIR, SKILL_FILE, SkillRegistry, _parse_frontmatter  # noqa: E402
+from xAgent.tools import files  # noqa: E402
 from xAgent.tools.create_skill import create_skill  # noqa: E402
 
 
@@ -52,6 +53,22 @@ class CreateSkillTests(unittest.TestCase):
             self.assertIn("demo-skill", prompt)
             self.assertIn("演示技能", prompt)
             self.assertNotIn("FULL-CONTENT-MARKER", prompt)
+
+    def test_uses_active_workspace_when_project_root_omitted(self):
+        original = files.get_workspace()
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            files.set_workspace(root)
+            try:
+                result = create_skill("active-workspace-skill", "跟随会话工作区", "body")
+                self.assertIn("已创建 Skill", result)
+                skill_dir = root / SKILLS_DIR / "active-workspace-skill"
+                self.assertTrue((skill_dir / SKILL_FILE).is_file())
+                self.assertIn(
+                    "active-workspace-skill", SkillRegistry(root).skills
+                )
+            finally:
+                files.set_workspace(original)
 
     def test_duplicate_is_refused_with_available_list(self):
         with tempfile.TemporaryDirectory() as raw:

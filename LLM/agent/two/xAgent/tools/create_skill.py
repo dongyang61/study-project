@@ -15,6 +15,7 @@ import secrets
 from pathlib import Path, PurePosixPath
 
 from ..skills import SKILLS_DIR, SKILL_FILE, SkillRegistry, init_skills
+from .files import get_workspace
 
 __all__ = ["TOOL_NAME", "CREATE_SKILL_TOOL", "SkillCreateError", "create_skill"]
 
@@ -154,7 +155,8 @@ def create_skill(
         if files is not None and not isinstance(files, list):
             return "createSkill 执行失败：files 必须是数组。"
 
-        root = Path(project_root or Path.cwd()).resolve()
+        # 默认跟随 AgentSession 的当前工作目录；恢复会话后仍写入会话所属工作区。
+        root = Path(project_root or get_workspace()).resolve()
         skills_root = root / SKILLS_DIR
         target = skills_root / name
         if target.exists():
