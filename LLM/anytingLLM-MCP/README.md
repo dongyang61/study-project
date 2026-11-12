@@ -34,7 +34,7 @@ python D:\study\LLM\anytingLLM-MCP\server.py
 
 ## 客户端配置
 
-配置文件：`D:\LLM-Course\Playground\mcp.json`
+配置文件：`D:\study\LLM\agent\office\.mcp.json`
 
 ```json
 {
